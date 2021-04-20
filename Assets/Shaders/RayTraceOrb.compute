@@ -1,0 +1,447 @@
+﻿#pragma kernel CSMain
+
+// Credit for sphere ray tracing goes to David Kuri http://blog.three-eyed-games.com/2018/05/03/gpu-ray-tracing-in-unity-part-1/
+// Inspiration for volumetric rendering goes to Sebastian Lague https://github.com/SebLague/Clouds
+
+RWTexture2D<float4> Result;
+
+Texture3D<float> _OrbData;
+SamplerState sampler_OrbData;
+float3 _OrbBoundsMin;
+float3 _OrbBoundsMax;
+float3 _OrbBoundsSize;
+float _OrbitalPower;
+float _IsoLevel;
+bool _ShowIso;
+bool _ShowGround;
+bool _ShowOrb;
+bool _ShowHBonds;
+
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+
+Texture2D<float4> _SkyboxTexture;
+SamplerState sampler_SkyboxTexture;
+
+float2 _PixelOffset;
+float4 _DirectionalLight;
+float4 _DirectionalLightRandom;
+float3 _GroundAlbedo;
+float3 _GroundSpecular;
+
+int numSpheres;
+int numBonds;
+int numHBonds;
+
+static const float PI = 3.14159265f;
+
+struct Sphere {
+    float3 position;
+    float radius;
+    float3 albedo;
+    float3 specular;
+};
+
+StructuredBuffer<Sphere> _Spheres;
+
+struct Cylinder {
+    float3 position;
+    float3 direction;
+    float radius;
+    float length;
+    float3 albedo0;
+    float3 specular0;
+    float3 albedo1;
+    float3 specular1;
+};
+
+StructuredBuffer<Cylinder> _Bonds;
+
+struct Ray {
+    float3 origin;
+    float3 direction;
+    float3 energy;
+};
+
+Ray CreateRay(float3 origin, float3 direction) {
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    ray.energy = float3(1.0f, 1.0f, 1.0f);
+    return ray;
+}
+
+Ray CreateCameraRay(float2 uv) {
+    // Transform the camera origin to world space
+    float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+    //float3 direction = mul(_CameraToWorld, float4(0.0f, 0.0f, 1.0f, 0.0f)).xyz;
+    //float3 direction = _CameraToWorld._m02_m12_m22;
+    
+    // Invert the perspective projection of the view-space position
+    // Y is flipped
+    float3 direction = mul(_CameraInverseProjection, float4(uv.x, -uv.y, 0.0f, 1.0f)).xyz;
+    // Transform the direction from camera to world space and normalize
+    direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
+    direction = normalize(direction);
+    return CreateRay(origin, direction);
+}
+
+struct RayHit {
+    float3 position;
+    float distance;
+    float3 normal;
+    float3 albedo;
+    float3 specular;
+};
+
+RayHit CreateRayHit() {
+    RayHit hit;
+    hit.position = float3(0.0f, 0.0f, 0.0f);
+    hit.distance = 1.#INF;
+    hit.normal = float3(0.0f, 0.0f, 0.0f);
+    hit.albedo = float3(0.0f, 0.0f, 0.0f);
+    hit.specular = float3(0.0f, 0.0f, 0.0f);
+    return hit;
+}
+
+void IntersectGroundPlane(Ray ray, inout RayHit bestHit) {
+    // Calculate distance along the ray where the ground plane is intersected
+    float t = -ray.origin.y / ray.direction.y;
+    if (t > 0 && t < bestHit.distance)
+    {
+        bestHit.distance = t;
+        bestHit.position = ray.origin + t * ray.direction;
+        bestHit.normal = float3(0.0f, 1.0f, 0.0f);
+        //float s = 2.0f / (1 + exp(0.01f * t));
+        float s = abs(dot(ray.direction, bestHit.normal));
+        bestHit.albedo = _GroundAlbedo * s;
+        bestHit.specular = _GroundSpecular * s;
+    }
+}
+
+void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere) {
+    // Calculate distance along the ray where the sphere is intersected
+    float3 d = ray.origin - sphere.position;
+    float p1 = -dot(ray.direction, d);
+    float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
+    if (p2sqr < 0)
+        return;
+    float p2 = sqrt(p2sqr);
+    float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
+    if (t > 0 && t < bestHit.distance) {
+        bestHit.distance = t;
+        bestHit.position = ray.origin + t * ray.direction;
+        bestHit.normal = normalize(bestHit.position - sphere.position);
+        bestHit.albedo = sphere.albedo;
+        bestHit.specular = sphere.specular;
+    }
+}
+
+// void IntersectCylinderAsSphere(Ray ray, inout RayHit bestHit, Cylinder cylinder) {
+//     // Debug - make sure cylinder is in the right place with right radius
+//     float3 d = ray.origin - cylinder.position;
+//     float p1 = -dot(ray.direction, d);
+//     float p2sqr = p1 * p1 - dot(d, d) + cylinder.radius * cylinder.radius;
+//     if (p2sqr < 0)
+//         return;
+//     float p2 = sqrt(p2sqr);
+//     float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
+//     if (t > 0 && t < bestHit.distance) {
+//         bestHit.distance = t;
+//         bestHit.position = ray.origin + t * ray.direction;
+//         bestHit.normal = normalize(bestHit.position - cylinder.position);
+//         bestHit.albedo = (cylinder.albedo0 + cylinder.albedo1) * 0.5f;
+//         bestHit.specular = (cylinder.specular0 + cylinder.specular1) * 0.5f;
+//     }
+// }
+
+void IntersectCylinder(Ray ray, inout RayHit bestHit, Cylinder cylinder) {
+    
+    float3 v = ray.direction;
+    float3 va = cylinder.direction;
+    float3 dp = ray.origin - cylinder.position;
+    float r2 = cylinder.radius * cylinder.radius;
+
+    // Quadratic equation for infinite cylinder
+    float3 rtA = v - dot(v, va) * va;
+    float3 rtC = dp - dot(dp, va) * va;
+    float A2 = 2 * dot(rtA, rtA);
+    float B = 2 * dot(rtA, rtC);
+    float C = dot(rtC, rtC) - r2;
+
+    float det = (B*B - 2*A2*C);
+
+    // Outside of infinite cylinder
+    if (det < 0) {
+        return;
+    }
+
+    float sqrtDet = sqrt(det);
+
+    // In the infinite cylinder
+    float t1 = (- B - sqrtDet) / A2;
+    float t2 = (- B + sqrtDet) / A2;
+
+    // Distance to cylinder
+    float t = t1 - t2 < 0 ? t1 : t2;
+
+    // Return if behind camera or blocked
+    if (t < 0 || t > bestHit.distance) {
+        return;
+    }
+
+    // Point on cylinder
+    float3 q = ray.origin + t * ray.direction;
+
+    // Distance from centre of cylinder and intersection projected onto va
+    float qva = dot(q - cylinder.position, va);
+
+    // Outside of finite cylinder
+    if (abs(qva) * 2 > cylinder.length) {
+        return;
+    }
+
+    bestHit.distance = t;
+    bestHit.position = q;
+    // Normal is vector from va to q, normalised
+    bestHit.normal = normalize(q - cylinder.position - va * qva);
+    bestHit.albedo = (cylinder.albedo0 + cylinder.albedo1) * 0.5f;
+    bestHit.specular = (cylinder.specular0 + cylinder.specular1) * 0.5f;
+
+}
+
+float IntersectHBond(Ray ray, RayHit bestHit, Cylinder hBond) {
+
+    float intersectAmount = 0;
+    
+    float3 v = ray.direction;
+    float3 va = hBond.direction;
+    float3 dp = ray.origin - hBond.position;
+    float r2 = hBond.radius * hBond.radius;
+
+    // Quadratic equation for infinite cylinder
+    float3 rtA = v - dot(v, va) * va;
+    float3 rtC = dp - dot(dp, va) * va;
+    float A2 = 2 * dot(rtA, rtA);
+    float B = 2 * dot(rtA, rtC);
+    float C = dot(rtC, rtC) - r2;
+
+    float det = (B*B - 2*A2*C);
+
+    // Check inside of infinite cylinder
+    if (det > 0) {
+        
+        float sqrtDet = sqrt(det);
+
+        // In the infinite cylinder
+        float t1 = (- B - sqrtDet) / A2;
+        float t2 = (- B + sqrtDet) / A2;
+
+        // Distance to cylinder
+        float t = t1 - t2 < 0 ? t1 : t2;
+
+        // Return if behind camera or blocked
+        if (t > 0 && t < bestHit.distance) {
+            
+            // Point on cylinder
+            float3 q = ray.origin + t * ray.direction;
+
+            // Distance from centre of cylinder and intersection projected onto va
+            float qva = dot(q - hBond.position, va);
+
+            // Outside of finite cylinder
+            if (abs(qva) * 2 < hBond.length) {
+                intersectAmount = abs(t1 - t2);
+            }   
+        }
+    }
+
+    return intersectAmount;
+
+}
+
+// Returns (dstToBox, dstInsideBox). If ray misses box, dstInsideBox will be zero
+float2 rayBoxDst(float3 boundsMin, float3 boundsMax, float3 rayOrigin, float3 invRaydir) {
+    // Adapted from: http://jcgt.org/published/0007/03/04/
+    float3 t0 = (boundsMin - rayOrigin) * invRaydir;
+    float3 t1 = (boundsMax - rayOrigin) * invRaydir;
+    float3 tmin = min(t0, t1);
+    float3 tmax = max(t0, t1);
+    
+    float dstA = max(max(tmin.x, tmin.y), tmin.z);
+    float dstB = min(tmax.x, min(tmax.y, tmax.z));
+
+    // CASE 1: ray intersects box from outside (0 <= dstA <= dstB)
+    // dstA is dst to nearest intersection, dstB dst to far intersection
+
+    // CASE 2: ray intersects box from inside (dstA < 0 < dstB)
+    // dstA is the dst to intersection behind the ray, dstB is dst to forward intersection
+
+    // CASE 3: ray misses box (dstA > dstB)
+
+    float dstToBox = max(0, dstA);
+    float dstInsideBox = max(0, dstB - dstToBox);
+    return float2(dstToBox, dstInsideBox);
+}
+
+RayHit Trace(Ray ray) {
+    RayHit bestHit = CreateRayHit();
+    if (_ShowGround) {
+        IntersectGroundPlane(ray, bestHit);
+    }
+
+    //Cylinders
+    for (int cylinderIndex = 0; cylinderIndex < numBonds; cylinderIndex++) {
+       IntersectCylinder(ray, bestHit, _Bonds[cylinderIndex]);
+    }
+
+    // Spheres
+    for (int sphereIndex = 0; sphereIndex < numSpheres; sphereIndex++) {
+       IntersectSphere(ray, bestHit, _Spheres[sphereIndex]);
+    }
+    
+    return bestHit;
+}
+
+float3 Shade(inout Ray ray, RayHit hit, bool sampleSky) {
+    float3 result = float3(0.0f, 0.0f, 0.0f);
+    if (hit.distance < 1.#INF) {
+        // Reflect the ray and multiply energy with specular reflection
+        ray.origin = hit.position + hit.normal * 0.001f;
+        ray.direction = reflect(ray.direction, hit.normal);
+        ray.energy *= hit.specular;
+
+        // Shadow test ray
+        Ray shadowRay = CreateRay(hit.position + hit.normal * 0.001f, -1 * _DirectionalLightRandom.xyz);
+        RayHit shadowHit = Trace(shadowRay);
+        if (shadowHit.distance == 1.#INF) {
+            // Return a diffuse-shaded color
+            result = saturate(dot(hit.normal, _DirectionalLight.xyz) * -1) * _DirectionalLight.w * hit.albedo;
+        }
+    } else {
+        // Erase the ray's energy - the sky doesn't reflect anything
+        ray.energy = 0.0f;
+        
+        if (sampleSky) {
+            // Sample the skybox and write it
+            //float theta = acos(ray.direction.y) / -PI;
+            //float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
+            //return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
+            result = (1 - dot(ray.direction, _DirectionalLight.xyz))*0.5;
+        }
+    }
+    
+    return result;
+}
+
+// void SampleOrbital(float3 position, inout float3 result) {
+
+//     float3 uvw = (position - _OrbBoundsMin) / (_OrbBoundsSize);
+//     float orbitalDensity = _OrbData.SampleLevel(sampler_OrbData, uvw, 0);
+
+//     float eps = 0.0001;
+    
+//     if (orbitalDensity > 0) {
+//         // Add red phase
+//         if (!_ShowIso || abs(orbitalDensity-_IsoLevel)<eps)
+//         result.x += orbitalDensity;
+//     } else {
+//         // Add blue phase
+//         if (!_ShowIso || abs(-orbitalDensity-_IsoLevel)<eps)
+//         result.z -= orbitalDensity;
+//     }
+// }
+
+float3 Orb(inout Ray ray, RayHit hit) {
+    // Adds colour based on whether we're going through orbital density
+
+    float3 result = float3(0.0f, 0.0f, 0.0f);
+
+    float2 rayToContainerInfo = rayBoxDst(_OrbBoundsMin, _OrbBoundsMax, ray.origin, 1/ray.direction);
+    float dstToBox = rayToContainerInfo.x;
+    float dstInsideBox = rayToContainerInfo.y;
+
+    float distance = 0;
+    float sampleDistance = 1.0f / 6.0f;
+    // Sample rate within box
+    float3 deltaSample = ray.direction * sampleDistance / _OrbBoundsSize;
+    
+    // Get world position of ray
+    float3 position = ray.origin + ray.direction * dstToBox;
+    // Position of ray within orb bounds
+    float3 uvw = (position - _OrbBoundsMin) / _OrbBoundsSize;
+    // Maximum extent of sample
+    float dstLimit = min(hit.distance-dstToBox, dstInsideBox);
+    // Iso epsilon
+    float eps = 0.0001;
+
+    while (distance < dstLimit) {
+        
+        float orbitalDensity = _OrbData.SampleLevel(sampler_OrbData, uvw, 0);
+        
+        if (orbitalDensity > 0) {
+            // Add red phase
+            if (!_ShowIso || abs(orbitalDensity-_IsoLevel)<eps)
+            result.x += orbitalDensity;
+        } else {
+            // Add blue phase
+            if (!_ShowIso || abs(-orbitalDensity-_IsoLevel)<eps)
+            result.z -= orbitalDensity;
+        }
+        uvw += deltaSample;
+        distance += sampleDistance;
+    }
+
+    if (_ShowIso) {
+        result *= sampleDistance * _OrbitalPower * 100;
+    } else {
+        result *= sampleDistance * _OrbitalPower;
+    }
+    
+
+    return result;
+}
+
+float3 HBond(Ray ray, RayHit hit) {
+
+    float intersectAmount = 0;
+    
+    for (int hBondIndex = numBonds; hBondIndex < numBonds+numHBonds; hBondIndex++) {
+        intersectAmount += IntersectHBond(ray, hit, _Bonds[hBondIndex]);
+    }
+
+    //Add some pink colour
+    return float3(1.0f, 0.4f, 1.0f) * saturate(intersectAmount * 4);
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID) {
+    // Get the dimensions of the RenderTexture
+    uint width, height;
+    Result.GetDimensions(width, height);
+    // Transform pixel to [-1,1] range and add a random pixel offset for antialiasing
+    float2 uv = float2((id.xy + _PixelOffset) / float2(width, height) * 2.0f - 1.0f);
+    // Get a ray for the UVs
+    Ray ray = CreateCameraRay(uv);
+    
+    // Trace and shade
+    float3 result = float3(0, 0, 0);
+
+    for (int i = 0; i < 3; i++) {
+        RayHit hit = Trace(ray);
+
+        if (_ShowOrb && i < 2) {
+            result += ray.energy * Orb(ray, hit);
+        }
+        if (_ShowHBonds && i < 2) {
+            result += ray.energy * HBond(ray, hit);
+        }
+        result += ray.energy * Shade(ray, hit, i != 0);
+        if (!any(ray.energy)) {
+            break;
+        }
+    }
+
+    Result[id.xy] = float4(result, 1);
+
+}
