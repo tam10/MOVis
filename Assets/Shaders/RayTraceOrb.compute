@@ -74,12 +74,9 @@ Ray CreateRay(float3 origin, float3 direction) {
 Ray CreateCameraRay(float2 uv) {
     // Transform the camera origin to world space
     float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
-    //float3 direction = mul(_CameraToWorld, float4(0.0f, 0.0f, 1.0f, 0.0f)).xyz;
-    //float3 direction = _CameraToWorld._m02_m12_m22;
     
     // Invert the perspective projection of the view-space position
-    // Y is flipped
-    float3 direction = mul(_CameraInverseProjection, float4(uv.x, -uv.y, 0.0f, 1.0f)).xyz;
+    float3 direction = mul(_CameraInverseProjection, float4(uv.x, uv.y, 0.0f, 1.0f)).xyz;
     // Transform the direction from camera to world space and normalize
     direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
     direction = normalize(direction);

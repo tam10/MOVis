@@ -13,18 +13,25 @@ Also supports .gjf and .com (Gaussian input files) for simple molecular visualis
 ## Controls
 
 Left-click drag : Orbit camera around molecule
+
 Right-click drag : Pan camera
+
 Scroll : Zoom camera
+
 Space : Stop motion
 
 +/- : Change orbital intensity
+
 Shift and +/- : Change iso level
 
 \[/\] : Change shadow cone angle
+
 Shift + Left-click drag : Orbit lighting around molecule
 
 I : Toggle isosurface
+
 G : Toggle ground plane
+
 H : Toggle hydrogen bonds
 
 ## Credits

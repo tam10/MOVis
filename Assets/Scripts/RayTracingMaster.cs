@@ -2,6 +2,7 @@
 using System.Linq;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
@@ -60,11 +61,14 @@ public class RayTracingMaster : MonoBehaviour {
     bool isPaused;
 
     public TextMeshProUGUI overlayText;
+    public Image textBackground;
     float textTimer;
     float textDuration = 3;
     float textFadeout = 1;
     Color whiteColor = new Color(1,1,1,1);
     Color clearColor = new Color(1,1,1,0);
+    Color backgroundColor = new Color(0.25f, 0.25f, 0.25f, 0.5f);
+    Color backgroundClear = new Color(0.25f, 0.25f, 0.25f, 0f);
     Coroutine textCoroutine;
     bool textCoroutineRunning;
 
@@ -136,13 +140,13 @@ public class RayTracingMaster : MonoBehaviour {
 
         OrbitalTexture.Apply ();
 
-        Vector3 min = cubeReader.gridOffset + sceneOffset;
+        Vector3 min = new Vector3(cubeReader.gridOffset.x, cubeReader.gridOffset.y, -cubeReader.gridOffset.z) + sceneOffset;
         Vector3 size = Vector3.Scale(
             cubeReader.gridScale, 
             new Vector3(
                 cubeReader.dimensions[0], 
                 cubeReader.dimensions[1], 
-                cubeReader.dimensions[2]
+                -cubeReader.dimensions[2]
             )
         );
         Vector3 max = size + min;
@@ -262,109 +266,27 @@ public class RayTracingMaster : MonoBehaviour {
     }
 
     private void SetUpSceneCUB() {
-        List<Sphere> spheres = new List<Sphere>();
 
-        Vector3 minP = cubeReader.atomicPositions[0];
-        Vector3 maxP = cubeReader.atomicPositions[0];
-        Vector3 centre = Vector3.zero;
-        float lowestY = float.MaxValue;
-        // Determine scene centre
-        for (int i = 0; i < cubeReader.numAtoms; i++) {
-            int atomicNumber = cubeReader.atomicNumbers[i];
+        int[][] connections = cubeReader.GetConnectivity().ToArray();
 
-            Vector3 position = cubeReader.atomicPositions[i];
-            centre += position;
-            if (position.y < lowestY) {
-                lowestY = position.y;
-            }
+        SetSceneCentre(cubeReader.atomicPositions);
 
-            minP = Vector3.Min(minP, position);
-            maxP = Vector3.Max(maxP, position);
-            //Debug.Log(position);
-        }
-
-
-        centre /= cubeReader.numAtoms;
-        lowestY -= centre.y;
-
-        sceneCentre = new Vector3(0, 2-lowestY, 0);
-
-        transform.position = sceneCentre + Vector3.forward * 20;
-        transform.rotation = Quaternion.Euler(180,0,0);
-
-        sceneOffset = - centre + sceneCentre;
-
-        // Add spheres
-        for (int i = 0; i < cubeReader.numAtoms; i++) {
-
-            Sphere sphere = new Sphere();
-            int atomicNumber = cubeReader.atomicNumbers[i];
-
-            // Radius and position
-            sphere.radius = Data.GetRadius(atomicNumber) * sphereSize;
-            sphere.position = cubeReader.atomicPositions[i] + sceneOffset;
-            
-            // Albedo and specular color
-            Vector3 color = Data.GetColour(atomicNumber);
-            sphere.albedo = Vector3.zero;
-            sphere.specular = color;
-
-            // Add the sphere to the list
-            spheres.Add(sphere);
-        }
+        List<Sphere> spheres = GetSpheres(cubeReader.atomicPositions, cubeReader.atomicNumbers);
 
         // Assign to compute buffer
         numSpheres = spheres.Count;
         _sphereBuffer = new ComputeBuffer(numSpheres, 40);
         _sphereBuffer.SetData(spheres);
 
-        List<Cylinder> bonds = new List<Cylinder>();
-
-        List<int[]> connections = cubeReader.GetConnectivity();
-
-        // Add bonds
-        for (int i = 0; i < connections.Count; i++) {
-            Cylinder cylinder = new Cylinder();
-
-            int index0 = connections[i][0];
-            int index1 = connections[i][1];
-
-            int atomicNumber0 = cubeReader.atomicNumbers[index0];
-            int atomicNumber1 = cubeReader.atomicNumbers[index1];
-
-            // Radius and position
-            cylinder.radius = (Data.GetRadius(atomicNumber0) + Data.GetRadius(atomicNumber1)) * cylinderSize * 0.5f;
-            cylinder.position = sceneOffset + (cubeReader.atomicPositions[index0] + cubeReader.atomicPositions[index1]) * 0.5f;
-            
-            // Dimensions
-            Vector3 v01 = (cubeReader.atomicPositions[index0] - cubeReader.atomicPositions[index1]);
-            cylinder.length = v01.magnitude;
-            cylinder.direction = (cylinder.length == 0) ? Vector3.forward : v01 / cylinder.length;
-
-            // Albedo and specular color
-            Vector3 color0 = Data.GetColour(atomicNumber0);
-            cylinder.albedo0 = Vector3.zero;
-            cylinder.specular0 = color0;
-            
-            Vector3 color1 = Data.GetColour(atomicNumber1);
-            cylinder.albedo1 = Vector3.zero;
-            cylinder.specular1 = color1;
-
-            bonds.Add(cylinder);
-        }
-        
-        // Assign to compute buffer
-        numBonds = bonds.Count;
-        RayTracingShader.SetInt("numBonds", numBonds);
-
         //Spheres
         RayTracingShader.SetInt("numSpheres", numSpheres);
         RayTracingShader.SetBuffer(0, "_Spheres", _sphereBuffer);
-        
-        //Sky
-        RayTracingShader.SetTexture(0, "_SkyboxTexture", SkyboxTexture);
 
-        List<Cylinder> hBonds = AddHBonds(connections, cubeReader.atomicPositions.ToList(), cubeReader.atomicNumbers.ToList());
+        List<Cylinder> bonds = GetBonds(connections, cubeReader.atomicPositions, cubeReader.atomicNumbers);
+        numBonds = bonds.Count;
+        RayTracingShader.SetInt("numBonds", numBonds);
+
+        List<Cylinder> hBonds = GetHBonds(connections, cubeReader.atomicPositions, cubeReader.atomicNumbers);
         numHydrogenBonds = hBonds.Count;
         RayTracingShader.SetInt("numHBonds", numHydrogenBonds);
         
@@ -374,17 +296,72 @@ public class RayTracingMaster : MonoBehaviour {
         _bondsBuffer.SetData(bonds);
         RayTracingShader.SetBuffer(0, "_Bonds", _bondsBuffer);
 
+        //Sky
+        RayTracingShader.SetTexture(0, "_SkyboxTexture", SkyboxTexture);
     }
-    private void SetUpSceneCOM() {
-        List<Sphere> spheres = new List<Sphere>();
 
-        Vector3 minP = comReader.positions[0];
-        Vector3 maxP = comReader.positions[0];
+    private void SetUpSceneCOM() {
+
+        Vector3[] atomicPositions = comReader.positions.ToArray();
+        int numAtoms = atomicPositions.Length;
+        string[] layers = comReader.layers.ToArray();
+        int[][] connections = comReader.connections.ToArray();
+
+        int[] atomicNumbers = GetAtomicNumbers(comReader.elements.ToArray());
+        SetSceneCentre(atomicPositions);
+
+        List<Sphere> spheres = GetSpheres(atomicPositions, atomicNumbers, layers);
+
+        // Assign to compute buffer
+        numSpheres = spheres.Count;
+        _sphereBuffer = new ComputeBuffer(numSpheres, 40);
+        _sphereBuffer.SetData(spheres);
+
+        //Spheres
+        RayTracingShader.SetInt("numSpheres", numSpheres);
+        RayTracingShader.SetBuffer(0, "_Spheres", _sphereBuffer);
+
+        List<Cylinder> bonds = GetBonds(connections, atomicPositions, atomicNumbers, layers);
+        numBonds = bonds.Count;
+        RayTracingShader.SetInt("numBonds", numBonds);
+
+        List<Cylinder> hBonds = GetHBonds(connections, atomicPositions, atomicNumbers);
+        numHydrogenBonds = hBonds.Count;
+        RayTracingShader.SetInt("numHBonds", numHydrogenBonds);
+        
+        //Cylinders
+        _bondsBuffer = new ComputeBuffer(numBonds + numHydrogenBonds, 80);
+        bonds.AddRange(hBonds);
+        _bondsBuffer.SetData(bonds);
+        RayTracingShader.SetBuffer(0, "_Bonds", _bondsBuffer);
+        
+        //Sky
+        RayTracingShader.SetTexture(0, "_SkyboxTexture", SkyboxTexture);
+    }
+
+    public int[] GetAtomicNumbers(string[] elements) {
+        int[] atomicNumbers = new int[elements.Length];
+        for (int i = 0; i < elements.Length; i++) {
+            atomicNumbers[i] = Data.GetAtomicNumber(elements[i]);
+        }
+        return atomicNumbers;
+    }
+
+    public void SetSceneCentre(
+        Vector3[] atomicPositions
+    ) {
+        
+        Vector3 minP = atomicPositions[0];
+        Vector3 maxP = atomicPositions[0];
         Vector3 centre = Vector3.zero;
         float lowestY = float.MaxValue;
         // Determine scene centre
-        for (int i = 0; i < comReader.atomIndex; i++) {
-            Vector3 position = comReader.positions[i];
+        for (int i = 0; i < atomicPositions.Length; i++) {
+            Vector3 position = atomicPositions[i];
+            
+            //Flip z
+            position.z = -position.z;
+
             centre += position;
             if (position.y < lowestY) {
                 lowestY = position.y;
@@ -395,31 +372,42 @@ public class RayTracingMaster : MonoBehaviour {
             //Debug.Log(position);
         }
 
-
-        centre /= comReader.atomIndex;
+        centre /= atomicPositions.Length;
         lowestY -= centre.y;
 
         sceneCentre = new Vector3(0, 2-lowestY, 0);
 
         transform.position = sceneCentre - Vector3.forward * 20;
 
-        sceneOffset = - centre + sceneCentre;
+        sceneOffset = sceneCentre - centre;
+    }
 
-        List<int> atomicNumbers = new List<int>();
-
-        // Add spheres
-        for (int i = 0; i < comReader.atomIndex; i++) {
+    public List<Sphere> GetSpheres(
+        Vector3[] atomicPositions,
+        int[] atomicNumbers,
+        string[] layers=null
+    ) {
+        List<Sphere> spheres = new List<Sphere>();
+        for (int i = 0; i < atomicPositions.Length; i++) {
 
             Sphere sphere = new Sphere();
-            string element = comReader.elements[i];
-            int atomicNumber = Data.GetAtomicNumber(element);
-            atomicNumbers.Add(atomicNumber);
-            string layer = comReader.layers[i];
+            int atomicNumber = atomicNumbers[i];
 
             // Radius and position
             sphere.radius = Data.GetRadius(atomicNumber) * sphereSize;
-            if (layer != "H") {sphere.radius *= 0.25f;}
-            sphere.position = comReader.positions[i] + sceneOffset;
+
+            if (layers != null) {
+                string layer = layers[i];
+                if (layer != "H") {
+                    sphere.radius *= 0.25f;
+                }
+            }
+
+            sphere.position = atomicPositions[i];
+
+            //Flip z
+            sphere.position.z = -sphere.position.z;
+            sphere.position += sceneOffset;
             
             // Albedo and specular color
             Vector3 color = Data.GetColour(atomicNumber);
@@ -429,38 +417,46 @@ public class RayTracingMaster : MonoBehaviour {
             // Add the sphere to the list
             spheres.Add(sphere);
         }
+        return spheres;
+    }
 
-        // Assign to compute buffer
-        numSpheres = spheres.Count;
-        _sphereBuffer = new ComputeBuffer(numSpheres, 40);
-        _sphereBuffer.SetData(spheres);
-
+    public List<Cylinder> GetBonds(
+        int[][] connections,
+        Vector3[] atomicPositions,
+        int[] atomicNumbers,
+        string[] layers=null
+    ) {
         List<Cylinder> bonds = new List<Cylinder>();
-
-        // Add bonds
-        for (int i = 0; i < comReader.connections.Count; i++) {
+        
+        for (int i = 0; i < connections.Length; i++) {
             Cylinder cylinder = new Cylinder();
 
-            int index0 = comReader.connections[i][0];
-            int index1 = comReader.connections[i][1];
-            
-            string element0 = comReader.elements[index0];
-            string element1 = comReader.elements[index1];
+            int index0 = connections[i][0];
+            int index1 = connections[i][1];
 
-            int atomicNumber0 = Data.GetAtomicNumber(element0);
-            int atomicNumber1 = Data.GetAtomicNumber(element1);
+            int atomicNumber0 = atomicNumbers[index0];
+            int atomicNumber1 = atomicNumbers[index1];
             
-            string layer0 = comReader.layers[index0];
-            string layer1 = comReader.layers[index1];
 
             // Radius and position
             cylinder.radius = (Data.GetRadius(atomicNumber0) + Data.GetRadius(atomicNumber1)) * cylinderSize * 0.5f;
-            if (layer0 != "H") {cylinder.radius *= 0.5f;}
-            if (layer1 != "H") {cylinder.radius *= 0.5f;}
-            cylinder.position = sceneOffset + (comReader.positions[index0] + comReader.positions[index1]) * 0.5f;
+
+            if (layers != null) {
+                string layer0 = layers[index0];
+                string layer1 = layers[index1];
+                if (layer0 != "H") {cylinder.radius *= 0.5f;}
+                if (layer1 != "H") {cylinder.radius *= 0.5f;}
+            }
+            cylinder.position = (atomicPositions[index0] + atomicPositions[index1]) * 0.5f;
             
+            //Flip z
+            cylinder.position.z = -cylinder.position.z;
+            cylinder.position += sceneOffset;
+
             // Dimensions
-            Vector3 v01 = (comReader.positions[index0] - comReader.positions[index1]);
+            Vector3 v01 = (atomicPositions[index0] - atomicPositions[index1]);
+            //Flip z
+            v01.z = -v01.z;
             cylinder.length = v01.magnitude;
             cylinder.direction = (cylinder.length == 0) ? Vector3.forward : v01 / cylinder.length;
 
@@ -475,34 +471,13 @@ public class RayTracingMaster : MonoBehaviour {
 
             bonds.Add(cylinder);
         }
-
-        // Assign to compute buffer
-        numBonds = bonds.Count;
-        RayTracingShader.SetInt("numBonds", numBonds);
-
-        //Spheres
-        RayTracingShader.SetInt("numSpheres", numSpheres);
-        RayTracingShader.SetBuffer(0, "_Spheres", _sphereBuffer);
-        
-        //Sky
-        RayTracingShader.SetTexture(0, "_SkyboxTexture", SkyboxTexture);
-
-        List<Cylinder> hBonds = AddHBonds(comReader.connections, comReader.positions, atomicNumbers);
-        numHydrogenBonds = hBonds.Count;
-        RayTracingShader.SetInt("numHBonds", numHydrogenBonds);
-        
-        //Cylinders
-        _bondsBuffer = new ComputeBuffer(numBonds + numHydrogenBonds, 80);
-        bonds.AddRange(hBonds);
-        _bondsBuffer.SetData(bonds);
-        RayTracingShader.SetBuffer(0, "_Bonds", _bondsBuffer);
-        
+        return bonds;
     }
 
-    public List<Cylinder> AddHBonds(
-        List<int[]> connections,
-        List<Vector3> atomicPositions,
-        List<int> atomicNumbers
+    public List<Cylinder> GetHBonds(
+        int[][] connections,
+        Vector3[] atomicPositions,
+        int[] atomicNumbers
     ) {
         List<int[]> hBondsConnections = GetHydrogenBonds(connections, atomicPositions, atomicNumbers);
         
@@ -517,10 +492,16 @@ public class RayTracingMaster : MonoBehaviour {
 
             // Radius and position
             cylinder.radius = cylinderSize;
-            cylinder.position = sceneOffset + (atomicPositions[index0] + atomicPositions[index1]) * 0.5f;
+            cylinder.position = (atomicPositions[index0] + atomicPositions[index1]) * 0.5f;
             
+            //Flip z
+            cylinder.position.z = -cylinder.position.z;
+            cylinder.position += sceneOffset;
+
             // Dimensions
             Vector3 v01 = (atomicPositions[index0] - atomicPositions[index1]);
+            //Flip z
+            v01.z = -v01.z;
             cylinder.length = v01.magnitude * 0.8f;
             cylinder.direction = (cylinder.length == 0) ? Vector3.forward : v01 / cylinder.length;
 
@@ -537,16 +518,15 @@ public class RayTracingMaster : MonoBehaviour {
         return hbonds;
     }
 
-
     public List<int[]> GetHydrogenBonds(
-        List<int[]> connections,
-        List<Vector3> atomicPositions,
-        List<int> atomicNumbers
+        int[][] connections,
+        Vector3[] atomicPositions,
+        int[] atomicNumbers
     ) {
-        int numAtoms = atomicPositions.Count;
+        int numAtoms = atomicPositions.Length;
         List<int[]> hydrogenBonds = new List<int[]>();
 
-        for (int i=0; i<connections.Count; i++) {
+        for (int i=0; i<connections.Length; i++) {
             int[] connection = connections[i];
             int index0 = connection[0];
             int index1 = connection[1];
@@ -699,6 +679,10 @@ public class RayTracingMaster : MonoBehaviour {
             SetText(showHBonds?"Showing hydrogen bonds":"Hiding hydrogen bondss");
         }
 
+        if (Input.GetKey(KeyCode.Escape)){
+            Application.Quit();
+        }
+
         transform.Translate(Vector3.forward * Input.mouseScrollDelta.y);
     }
 
@@ -712,14 +696,14 @@ public class RayTracingMaster : MonoBehaviour {
             
             deltaMousePosition = mousePosition - Input.mousePosition;
             transform.RotateAround(sceneCentre, transform.up, -deltaMousePosition.x*rotationSpeed);
-            transform.RotateAround(sceneCentre, transform.right, -deltaMousePosition.y*rotationSpeed);
+            transform.RotateAround(sceneCentre, transform.right, deltaMousePosition.y*rotationSpeed);
             mousePosition = Input.mousePosition;
             yield return null;
         }
 
         while (deltaMousePosition != Vector3.zero) {
             transform.RotateAround(sceneCentre, transform.up, -deltaMousePosition.x*rotationSpeed);
-            transform.RotateAround(sceneCentre, transform.right, -deltaMousePosition.y*rotationSpeed);
+            transform.RotateAround(sceneCentre, transform.right, deltaMousePosition.y*rotationSpeed);
             yield return null;
         }
     }
@@ -749,14 +733,12 @@ public class RayTracingMaster : MonoBehaviour {
         while (Input.GetMouseButton(1)) {
             
             deltaMousePosition = mousePosition - Input.mousePosition;
-            deltaMousePosition.y = -deltaMousePosition.y;
             transform.Translate(deltaMousePosition * translationSpeed, Space.Self);
             mousePosition = Input.mousePosition;
             yield return null;
         }
 
         if (deltaMousePosition != Vector3.zero) {
-            deltaMousePosition.y = -deltaMousePosition.y;
             transform.Translate(deltaMousePosition * translationSpeed, Space.Self);
             yield return null;
         }
@@ -775,10 +757,13 @@ public class RayTracingMaster : MonoBehaviour {
         overlayText.color = whiteColor;
         while (textTimer > 0) {
             textTimer -= Time.deltaTime;
-            overlayText.color = Color.Lerp(clearColor, whiteColor, Mathf.Clamp01(textTimer / textFadeout));
+            float t = Mathf.Clamp01(textTimer / textFadeout);
+            overlayText.color = Color.Lerp(clearColor, whiteColor, t);
+            textBackground.color = Color.Lerp(backgroundClear, backgroundColor, t);
             yield return null;
         }
         overlayText.color = clearColor;
+        textBackground.color = backgroundClear;
         textCoroutineRunning = false;
     }
 }
