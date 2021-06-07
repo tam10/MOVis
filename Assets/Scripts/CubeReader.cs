@@ -28,6 +28,8 @@ public class CubeReader : MonoBehaviour {
     int atomIndex;
     int skipLines;
 
+    bool additionalRecord;
+
     string line;
 
     public void Parse(string path) {
@@ -64,7 +66,14 @@ public class CubeReader : MonoBehaviour {
 
     void ParseOffset() {
         string[] offset_spec = line.Split (new []{ " " }, System.StringSplitOptions.RemoveEmptyEntries);
-        numAtoms = Mathf.Abs(int.Parse(offset_spec[0]));
+        numAtoms = int.Parse(offset_spec[0]);
+
+        if (numAtoms < 0) {
+            numAtoms = -numAtoms;
+            additionalRecord = true;
+        } else {
+            additionalRecord = false;
+        }
 
         atomicPositions = new Vector3[numAtoms];
         atomicNumbers = new int[numAtoms];
@@ -116,9 +125,9 @@ public class CubeReader : MonoBehaviour {
         
         atomIndex++;
         if (atomIndex == numAtoms) {
-            skipLines = 1;
+            skipLines = additionalRecord ? 1 : 0;
             gridLength = dimensions[0] * dimensions[1] * dimensions[2];
-            grid = new float[gridLength];
+            grid = new float[gridLength*2];
             gridIndex = 0;
             activeParser = ParseGrid;
 
@@ -139,7 +148,13 @@ public class CubeReader : MonoBehaviour {
                 if (value < minVal) {minVal=value;}
                 if (value > maxVal) {maxVal=value;}
 
-                grid [gridIndex++] = value;
+                if (value >= 0) {
+                    grid [gridIndex++] = value;
+                    grid [gridIndex++] = 0;
+                } else {
+                    grid [gridIndex++] = 0;
+                    grid [gridIndex++] = -value;
+                }
             }
         }
     }
@@ -159,9 +174,15 @@ public class CubeReader : MonoBehaviour {
                 if (value > maxVal) {maxVal=value;}
 
                 //int index = dimensions[2] * (x * dimensions[1] + y) + z;
-                int index = dimensions[0] * (z * dimensions[1] + y) + x;
+                int index = 2 * (dimensions[0] * (z * dimensions[1] + y) + x);
 
-                grid [index] = value;
+                if (value >= 0) {
+                    grid [index] = value;
+                    grid [index+1] = 0;
+                } else {
+                    grid [index] = 0;
+                    grid [index+1] = -value;
+                }
                 
                 z++;
                 if (z >= dimensions[2]) {
@@ -173,7 +194,8 @@ public class CubeReader : MonoBehaviour {
                     }
                 }
 
-                gridIndex++;
+                gridIndex += 2;
+
             }
         }
     }

@@ -9,12 +9,12 @@ using System.Xml.Linq;
 
 public static class Data {
 
-    public static int GetAtomicNumber(string element) => elementToNumber[element];
-    public static Vector3 GetColour(int atomicNumber) => numberToAlbedo[atomicNumber];
+    public static int GetAtomicNumber(string element) => elementToNumber.ContainsKey(element) ? elementToNumber[element] : 0;
+    public static Vector3 GetColour(int atomicNumber) => numberToAlbedo.ContainsKey(atomicNumber) ? numberToAlbedo[atomicNumber] : numberToAlbedo[0];
     public static Vector3 GetColour(string element) => numberToAlbedo[GetAtomicNumber(element)];
-    public static float GetRadius(int atomicNumber) => numberToRadius[atomicNumber];
+    public static float GetRadius(int atomicNumber) => numberToRadius.ContainsKey(atomicNumber) ? numberToRadius[atomicNumber] : numberToRadius[0];
     public static float GetRadius(string element) => numberToRadius[GetAtomicNumber(element)];
-    public static float GetMass(int atomicNumber) => numberToMass[atomicNumber];
+    public static float GetMass(int atomicNumber) => numberToMass.ContainsKey(atomicNumber) ? numberToMass[atomicNumber] : numberToMass[0];
     public static float GetMass(string element) => numberToMass[GetAtomicNumber(element)];
     
     static Dictionary<string, int> elementToNumber = new Dictionary<string, int> {

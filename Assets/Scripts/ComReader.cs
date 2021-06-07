@@ -23,6 +23,9 @@ public class ComReader : MonoBehaviour {
 	public List<Vector3> positions;
 	public List<int[]> connections;
 
+	public Vector3 minBound = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+	public Vector3 maxBound = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+
     string line;
 	public bool failed;
 
@@ -166,6 +169,8 @@ public class ComReader : MonoBehaviour {
 
 		elements.Add(element);
 		Vector3 position = new Vector3(x,y,z);
+		minBound = Vector3.Min(minBound, position);
+		maxBound = Vector3.Max(maxBound, position);
 		positions.Add(position);
 		layers.Add(layer);
 		atomIndex++;

@@ -30,9 +30,21 @@ Shift + Left-click drag : Orbit lighting around molecule
 
 I : Toggle isosurface
 
+D : Toggle density
+
 G : Toggle ground plane
 
 H : Toggle hydrogen bonds
+
+E : Export screenshot
+
+B : Rotate to best view
+
+Shift + E : Export high-resolution screenshot
+
+1-7 : Change colour of positive phase / negative phase (Shift) / hydrogen bonds (Ctrl)
+
+Escape : Quit
 
 ## Credits
 

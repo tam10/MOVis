@@ -191,7 +191,7 @@ public class FileSelector : MonoBehaviour {
 			userResponded = true;
 			cancelled = false;
 
-			RayTracingMaster.cubeFile = fullPath;
+			RayTracingMaster.inputFile = fullPath;
 			SceneManager.LoadScene("Visualiser");
 		}
 	}

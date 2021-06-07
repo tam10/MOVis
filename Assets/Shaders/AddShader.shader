@@ -7,9 +7,10 @@
     {
         
         Cull Off ZWrite Off ZTest Always
-        Blend SrcAlpha OneMinusSrcAlpha
+        Blend SrcAlpha OneMinusSrcAlpha, SrcAlpha One
+        //Blend One Zero
 
-        Tags { "RenderType"="Opaque" }
+        Tags { "RenderType"="Tranparent" }
         LOD 100
 
         Pass
@@ -17,9 +18,6 @@
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            // make fog work
-            #pragma multi_compile_fog
-            
             #include "UnityCG.cginc"
 
             struct appdata
@@ -37,19 +35,22 @@
 
             sampler2D _MainTex;
             float4 _MainTex_ST;
-            float _Sample;
+            float _Alpha;
             
             v2f vert (appdata v)
             {
                 v2f o;
                 o.vertex = UnityObjectToClipPos(v.vertex);
                 o.uv = TRANSFORM_TEX(v.uv, _MainTex);
-                UNITY_TRANSFER_FOG(o,o.vertex);
+                //UNITY_TRANSFER_FOG(o,o.vertex);
                 return o;
             }
             
             float4 frag (v2f i) : SV_Target {
-                return float4(tex2D(_MainTex, i.uv).rgb, 1.0f / (_Sample + 1.0f));
+                //return float4(tex2D(_MainTex, i.uv).rgb, _Alpha);
+                float4 result = tex2D(_MainTex, i.uv);
+                result.a *= _Alpha;
+                return result;
             }
             ENDCG
         }
